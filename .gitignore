@@ -1,0 +1,34 @@
+# =========================
+# VS Code local settings
+# =========================
+.vscode/
+
+# =========================
+# Keil MDK build outputs
+# =========================
+#!MDK-ARM/RTE/**是chatgpt建议这么写，它是把 RTE 目录里面的所有文件和子目录也放出来。
+MDK-ARM/*
+!MDK-ARM/RTE/
+!MDK-ARM/RTE/**
+!MDK-ARM/startup_stm32f103xb.s
+!MDK-ARM/Short_Long_Key.uvprojx
+
+# =========================
+# Keep scatter file inside output folder
+# Short_Long_Key.sct 在 MDK-ARM/Short_Long_Key/ 目录下
+# 所以必须先放行目录，再忽略目录内容，最后单独放行 .sct
+# =========================
+!MDK-ARM/Short_Long_Key/
+MDK-ARM/Short_Long_Key/*
+!MDK-ARM/Short_Long_Key/Short_Long_Key.sct
+
+
+# =========================
+# Common temporary files
+# =========================
+#这些事常见的临时文件类型，防止以后某些软件生成了这些文件后被误提交到版本控制系统中。
+*.bak
+*.tmp
+*.log
+*.orig
+*.swp
