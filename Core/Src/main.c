@@ -69,6 +69,10 @@ typedef enum
 #define LED_OFF_LEVEL                GPIO_PIN_SET
 /* 等待确认阶段的 LED 闪烁周期，用于提示当前处于开机/关机确认流程。 */
 #define DEBUG_LED_BLINK_MS           250U
+#define Key_LED_BLINK_MS             250U
+
+#define Key_LED_ON_LEVEL               GPIO_PIN_SET
+#define Key_LED_OFF_LEVEL              GPIO_PIN_RESET
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -111,8 +115,11 @@ void SystemClock_Config(void);
 static void Power_Hold_Early_Init(void);
 static void Power_Hold_On(void);
 static void Power_Hold_Off(void);
+static void MOS_Driven_On(void);
+static void MOS_Driven_Off(void);
 static void Debug_LED_Set(uint8_t led_on);
-static void Debug_LED_Update(uint32_t now);
+static void Key_LED_Set(uint8_t led_on);
+static void Key_LED_Update(uint32_t now);
 static uint8_t Time_Elapsed(uint32_t now, uint32_t start, uint32_t period);
 static uint8_t Key_Is_Pressed(void);
 static void Key_Update(uint32_t now);
@@ -142,6 +149,25 @@ static void Power_Hold_Off(void)
 {
   HAL_GPIO_WritePin(power_control_GPIO_Port, power_control_Pin, GPIO_PIN_RESET);
 }
+
+/**
+  * @brief  拉高 Mos_drived_Pin，驱动 MOS 管导通。
+  * @note   Mos_drived_Pin 输出高电平时 MOS 管导通，允许电流通过。
+  */
+static void MOS_Driven_On(void)
+{
+  HAL_GPIO_WritePin(Mos_drived_GPIO_Port, Mos_drived_Pin, GPIO_PIN_SET);
+}
+
+/**
+  * @brief  拉低 Mos_drived_Pin，关闭 MOS 管。
+  * @note   Mos_drived_Pin 输出低电平时 MOS 管关闭，不允许电流通过。
+  */
+static void MOS_Driven_Off(void)
+{
+  HAL_GPIO_WritePin(Mos_drived_GPIO_Port, Mos_drived_Pin, GPIO_PIN_RESET);
+}
+
 
 /**
   * @brief  尽早初始化 PA9 并拉高，避免启动确认前掉电。
@@ -176,6 +202,18 @@ static void Debug_LED_Set(uint8_t led_on)
   HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin,
                     (led_on != 0U) ? LED_ON_LEVEL : LED_OFF_LEVEL);
 }
+
+/**
+  * @brief  设置 PB5 调试 LED 状态。
+  * @param  led_on 非 0 点亮 LED，0 熄灭 LED。
+  * @note   PB5 为低电平点亮、高电平熄灭；该 LED 只用于调试组合按键状态。
+  */
+static void Key_LED_Set(uint8_t led_on)
+{
+  HAL_GPIO_WritePin(Key_LED_GPIO_Port, Key_LED_Pin,
+                    (led_on != 0U) ? Key_LED_ON_LEVEL : Key_LED_OFF_LEVEL);
+}
+
 
 /**
   * @brief  判断指定毫秒时间是否已经过去。
@@ -301,25 +339,28 @@ static void Shutdown_Prepare(void)
   * @brief  根据当前电源状态刷新 PB5 调试 LED。
   * @note   等待确认时闪烁，正常运行时常亮，断电流程中熄灭。
   */
-static void Debug_LED_Update(uint32_t now)
+static void Key_LED_Update(uint32_t now)
 {
   switch (power_state)
   {
     case WAIT_POWER_ON_CONFIRM:
     case WAIT_SHUTDOWN_CONFIRM:
       /* 开机/关机确认阶段闪烁，提示用户当前正在等待第二次长按。 */
-      Debug_LED_Set((((now / DEBUG_LED_BLINK_MS) & 1U) != 0U) ? 1U : 0U);
+      // Debug_LED_Set((((now / DEBUG_LED_BLINK_MS) & 1U) != 0U) ? 1U : 0U);
+      Key_LED_Set((((now / Key_LED_BLINK_MS) & 1U)) != 0U ? 1U : 0U);
       break;
 
     case NORMAL_RUN:
       /* 正常运行阶段常亮，表示 PA9 已保持高电平，系统供电有效。 */
-      Debug_LED_Set(1U);
+      // Debug_LED_Set(1U);
+      Key_LED_Set(1U);
       break;
 
     case POWER_OFF:
     default:
       /* 断电阶段熄灭；PB5 不参与电源控制，只做状态提示。 */
-      Debug_LED_Set(0U);
+      // Debug_LED_Set(0U);
+      Key_LED_Set(0U);
       break;
   }
 }
@@ -399,6 +440,10 @@ static void Power_Key_Control_Task(void)
       {
         /* 第二次按下持续达到开机确认长按时间，开机成功并进入正常运行。 */
         second_press_started = 0U;
+
+        //在程序进入稳定运行状态，先把MOS通道打开
+        MOS_Driven_On();
+
         power_state = NORMAL_RUN;
       }
       break;
@@ -456,6 +501,10 @@ static void Power_Key_Control_Task(void)
         /* 第二次按下达到关机长按时间：先做关机准备，再拉低 PA9 断电。 */
         Shutdown_Prepare();
         Debug_LED_Set(0U);
+
+        //在单片机断电之前，先把MOS通道断开
+        MOS_Driven_Off();
+
         power_state = POWER_OFF;
         Power_Hold_Off();
       }
@@ -467,7 +516,7 @@ static void Power_Key_Control_Task(void)
       break;
   }
 
-  Debug_LED_Update(now);
+  Key_LED_Update(now);
 }
 
 /* USER CODE END 0 */
@@ -508,9 +557,10 @@ int main(void)
   Power_Key_Control_Init();
 
   //这两个引脚是临时测试功能使用的
-  HAL_GPIO_WritePin(GPIOB, Key_LED_Pin, GPIO_PIN_SET);  /* 上电后先点亮 PB5，表示系统已开始运行；后续状态由 Power_Key_Control_Task 刷新。 */
-  HAL_GPIO_WritePin(GPIOB, Mos_drived_Pin, GPIO_PIN_SET);  
-  /* USER CODE END 2 */
+  //这个工程是GitHub下拉的Short_Long_Switch
+  // HAL_GPIO_WritePin(GPIOB, Key_LED_Pin, GPIO_PIN_SET);  /* 上电后先点亮 PB5，表示系统已开始运行；后续状态由 Power_Key_Control_Task 刷新。 */
+  // HAL_GPIO_WritePin(GPIOB, Mos_drived_Pin, GPIO_PIN_SET);  
+  // /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
