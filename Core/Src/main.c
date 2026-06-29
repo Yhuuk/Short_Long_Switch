@@ -31,9 +31,9 @@
 typedef enum
 {
   WAIT_POWER_ON_CONFIRM = 0,  /* 开机确认阶段：第一次短按由硬件完成，软件等待松开后再检测第二次长按。 */
-  NORMAL_RUN,                 /* 正常运行阶段：PA9 保持高电平，系统已经自保持供电。 */
+  NORMAL_RUN,                 /* 正常运行阶段：power_control(PA10) 保持高电平，系统已经自保持供电。 */
   WAIT_SHUTDOWN_CONFIRM,      /* 关机确认阶段：已检测到有效短按，等待窗口内的第二次长按。 */
-  POWER_OFF                   /* 断电阶段：PA9 已释放或即将释放，程序通常会随电源关闭停止运行。 */
+  POWER_OFF                   /* 断电阶段：power_control(PA10) 已释放或即将释放，程序通常会随电源关闭停止运行。 */
 } PowerState_t;
 
 /* USER CODE END PTD */
@@ -55,16 +55,16 @@ typedef enum
 /* 关机确认长按时间：第二次按下必须持续达到该时间，才执行关机。 */
 #define SHUTDOWN_LONG_PRESS_MS       1200U
 
-/* 开机总确认超时：上电后若一直未完成释放和第二次长按，则释放 PA9 让系统断电。 */
+/* 开机总确认超时：上电后若一直未完成释放和第二次长按，则释放 power_control(PA10) 让系统断电。 */
 #define POWER_ON_CONFIRM_TIMEOUT_MS  4500U
 
-/* PA15 is pulled up: released is high and a pressed key reads low. */
-/* PA15 为上拉输入：松开为高电平，按下为低电平；以后更换硬件电平时集中改这里。 */
+/* Key_Detectd(PA8) is pulled up: released is high and a pressed key reads low. */
+/* Key_Detectd(PA8) 为上拉输入：松开为高电平，按下为低电平；以后更换硬件电平时集中改这里。 */
 #define KEY_PRESSED_LEVEL            GPIO_PIN_RESET
 #define KEY_RELEASED_LEVEL           GPIO_PIN_SET
 
-/* PB5 debug LED is active low. */
-/* PB5 调试 LED 为低电平点亮、高电平熄灭；它只用于观察流程，不参与真正电源控制。 */
+/* Legacy PB5 debug LED is active low; it is not used on the second board revision. */
+/* 旧版 PB5 调试 LED 为低电平点亮；第二版硬件不再使用该引脚。 */
 #define LED_ON_LEVEL                 GPIO_PIN_RESET
 #define LED_OFF_LEVEL                GPIO_PIN_SET
 /* 等待确认阶段的 LED 闪烁周期，用于提示当前处于开机/关机确认流程。 */
@@ -117,7 +117,7 @@ static void Power_Hold_On(void);
 static void Power_Hold_Off(void);
 static void MOS_Driven_On(void);
 static void MOS_Driven_Off(void);
-static void Debug_LED_Set(uint8_t led_on);
+// static void Debug_LED_Set(uint8_t led_on);
 static void Key_LED_Set(uint8_t led_on);
 static void Key_LED_Update(uint32_t now);
 static uint8_t Time_Elapsed(uint32_t now, uint32_t start, uint32_t period);
@@ -133,8 +133,8 @@ static void Shutdown_Prepare(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 /**
-  * @brief  拉高 PA9，保持系统自保持供电。
-  * @note   PA9 输出高电平时三极管导通，按键松开后系统仍能继续供电。
+  * @brief  拉高 power_control(PA10)，保持系统自保持供电。
+  * @note   power_control 输出高电平时三极管导通，按键松开后系统仍能继续供电。
   */
 static void Power_Hold_On(void)
 {
@@ -142,8 +142,8 @@ static void Power_Hold_On(void)
 }
 
 /**
-  * @brief  拉低 PA9，释放电源保持。
-  * @note   PA9 输出低电平时三极管关断，硬件电源会关闭，系统即将断电。
+  * @brief  拉低 power_control(PA10)，释放电源保持。
+  * @note   power_control 输出低电平时三极管关断，硬件电源会关闭，系统即将断电。
   */
 static void Power_Hold_Off(void)
 {
@@ -170,7 +170,7 @@ static void MOS_Driven_Off(void)
 
 
 /**
-  * @brief  尽早初始化 PA9 并拉高，避免启动确认前掉电。
+  * @brief  尽早初始化 power_control(PA10) 并拉高，避免启动确认前掉电。
   * @note   开机时第一次短按由硬件完成；STM32 上电后要先自保持，再等待第二次长按确认。
   */
 static void Power_Hold_Early_Init(void)
@@ -179,9 +179,9 @@ static void Power_Hold_Early_Init(void)
 
   /*
    * Drive the hold pin before ordinary peripheral initialization.  Setting the
-   * output latch first avoids a low pulse while PA9 changes to output mode.
+   * output latch first avoids a low pulse while power_control changes to output mode.
    */
-  /* 先打开 GPIOA 时钟，再写 PA9 输出锁存器，减少 PA9 进入输出模式时出现低脉冲的风险。 */
+  /* 先打开 GPIOA 时钟，再写 power_control 输出锁存器，减少进入输出模式时出现低脉冲的风险。 */
   __HAL_RCC_GPIOA_CLK_ENABLE();
   Power_Hold_On();
   GPIO_InitStruct.Pin = power_control_Pin;
@@ -192,21 +192,21 @@ static void Power_Hold_Early_Init(void)
   Power_Hold_On();
 }
 
-/**
-  * @brief  设置 PB5 调试 LED 状态。
-  * @param  led_on 非 0 点亮 LED，0 熄灭 LED。
-  * @note   PB5 为低电平点亮、高电平熄灭；该 LED 只用于调试组合按键状态。
-  */
-static void Debug_LED_Set(uint8_t led_on)
-{
-  HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin,
-                    (led_on != 0U) ? LED_ON_LEVEL : LED_OFF_LEVEL);
-}
+// /**
+//   * @brief  设置旧版 PB5 调试 LED 状态。
+//   * @param  led_on 非 0 点亮 LED，0 熄灭 LED。
+//   * @note   PB5 为低电平点亮、高电平熄灭；第二版硬件不再使用该调试 LED。
+//   */
+// static void Debug_LED_Set(uint8_t led_on)
+// {
+//   HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin,
+//                     (led_on != 0U) ? LED_ON_LEVEL : LED_OFF_LEVEL);
+// }
 
 /**
-  * @brief  设置 PB5 调试 LED 状态。
+  * @brief  设置按键自带 LED 状态。
   * @param  led_on 非 0 点亮 LED，0 熄灭 LED。
-  * @note   PB5 为低电平点亮、高电平熄灭；该 LED 只用于调试组合按键状态。
+  * @note   Key_LED(PA9) 高电平点亮、低电平熄灭；用于提示组合按键状态。
   */
 static void Key_LED_Set(uint8_t led_on)
 {
@@ -227,7 +227,7 @@ static uint8_t Time_Elapsed(uint32_t now, uint32_t start, uint32_t period)
 /**
   * @brief  读取消抖后的按键状态。
   * @retval 1 按键按下；0 按键松开。
-  * @note   PA15 上拉输入，稳定电平为 KEY_PRESSED_LEVEL 时表示按键被按下。
+  * @note   Key_Detectd(PA8) 上拉输入，稳定电平为 KEY_PRESSED_LEVEL 时表示按键被按下。
   */
 static uint8_t Key_Is_Pressed(void)
 {
@@ -247,7 +247,7 @@ static void Key_Update(uint32_t now)
   key_press_event = 0U;
   key_release_event = 0U;
 
-  /* 读取 PA15 原始电平：上拉输入下，松开为高，按下为低。 */
+  /* 读取 Key_Detectd(PA8) 原始电平：上拉输入下，松开为高，按下为低。 */
   sampled_level = HAL_GPIO_ReadPin(Key_Detectd_GPIO_Port, Key_Detectd_Pin);
 
   if (sampled_level != key_raw_level)
@@ -280,15 +280,15 @@ static void Key_Update(uint32_t now)
 
 /**
   * @brief  电源按键状态机初始化。
-  * @note   GPIO 初始化后调用；会保持 PA9 高电平，并进入开机确认等待状态。
+  * @note   GPIO 初始化后调用；会保持 power_control(PA10) 高电平，并进入开机确认等待状态。
   */
 static void Power_Key_Control_Init(void)
 {
   uint32_t now = HAL_GetTick();
 
-  /* 再次拉高 PA9，确保系统进入自保持供电；PB5 默认熄灭。 */
+  /* 再次拉高 power_control(PA10)，确保系统进入自保持供电；Key_LED 默认熄灭。 */
   Power_Hold_On();
-  Debug_LED_Set(0U);
+  // Debug_LED_Set(0U);
 
   key_raw_level = HAL_GPIO_ReadPin(Key_Detectd_GPIO_Port, Key_Detectd_Pin);
   /*
@@ -309,26 +309,26 @@ static void Power_Key_Control_Init(void)
   second_press_started = 0U;
   power_on_attempt_tick = now;
   confirm_window_start_tick = now;
-  /* 初始进入开机确认状态；若后续确认失败，会拉低 PA9 自动断电。 */
+  /* 初始进入开机确认状态；若后续确认失败，会拉低 power_control(PA10) 自动断电。 */
   power_state = WAIT_POWER_ON_CONFIRM;
 }
 
 /**
   * @brief  取消开机确认并释放电源保持。
-  * @note   开机确认超时或第二次长按不足时调用，会拉低 PA9，系统即将断电。
+  * @note   开机确认超时或第二次长按不足时调用，会拉低 power_control(PA10)，系统即将断电。
   */
 static void Cancel_Power_On(void)
 {
   /* No valid startup confirmation: release the temporary power latch. */
-  /* 没有得到有效开机确认，熄灭调试 LED 后释放 PA9。 */
-  Debug_LED_Set(0U);
+  /* 没有得到有效开机确认，熄灭提示 LED 后释放 power_control(PA10)。 */
+  // Debug_LED_Set(0U);
   power_state = POWER_OFF;
   Power_Hold_Off();
 }
 
 /**
   * @brief  关机前准备入口。
-  * @note   当前为空实现；以后可在这里保存数据、关闭外设，再由状态机拉低 PA9。
+  * @note   当前为空实现；以后可在这里保存数据、关闭外设，再由状态机拉低 power_control(PA10)。
   */
 static void Shutdown_Prepare(void)
 {
@@ -336,7 +336,7 @@ static void Shutdown_Prepare(void)
 }
 
 /**
-  * @brief  根据当前电源状态刷新 PB5 调试 LED。
+  * @brief  根据当前电源状态刷新 Key_LED(PA9)。
   * @note   等待确认时闪烁，正常运行时常亮，断电流程中熄灭。
   */
 static void Key_LED_Update(uint32_t now)
@@ -351,14 +351,14 @@ static void Key_LED_Update(uint32_t now)
       break;
 
     case NORMAL_RUN:
-      /* 正常运行阶段常亮，表示 PA9 已保持高电平，系统供电有效。 */
+      /* 正常运行阶段常亮，表示 power_control(PA10) 已保持高电平，系统供电有效。 */
       // Debug_LED_Set(1U);
       Key_LED_Set(1U);
       break;
 
     case POWER_OFF:
     default:
-      /* 断电阶段熄灭；PB5 不参与电源控制，只做状态提示。 */
+      /* 断电阶段熄灭；Key_LED 不参与电源控制，只做状态提示。 */
       // Debug_LED_Set(0U);
       Key_LED_Set(0U);
       break;
@@ -387,7 +387,7 @@ static void Power_Key_Control_Task(void)
       if (Time_Elapsed(now, power_on_attempt_tick,
                        POWER_ON_CONFIRM_TIMEOUT_MS) != 0U)
       {
-        /* 开机确认总超时：用户没有完成后续长按，释放 PA9 让系统断电。 */
+        /* 开机确认总超时：用户没有完成后续长按，释放 power_control(PA10) 让系统断电。 */
         Cancel_Power_On();
         break;
       }
@@ -429,7 +429,7 @@ static void Power_Key_Control_Task(void)
          * An incomplete confirming hold is treated as a failed startup.
          * A new attempt must begin from hardware after power is released.
          */
-        /* 第二次长按时间不够就松开，本次开机确认失败，直接释放 PA9。 */
+        /* 第二次长按时间不够就松开，本次开机确认失败，直接释放 power_control(PA10)。 */
         Cancel_Power_On();
         break;
       }
@@ -498,9 +498,9 @@ static void Power_Key_Control_Task(void)
           (Time_Elapsed(now, key_press_start_tick,
                         SHUTDOWN_LONG_PRESS_MS) != 0U))
       {
-        /* 第二次按下达到关机长按时间：先做关机准备，再拉低 PA9 断电。 */
+        /* 第二次按下达到关机长按时间：先做关机准备，再拉低 power_control(PA10) 断电。 */
         Shutdown_Prepare();
-        Debug_LED_Set(0U);
+        // Debug_LED_Set(0U);
 
         //在单片机断电之前，先把MOS通道断开
         MOS_Driven_Off();
@@ -538,7 +538,7 @@ int main(void)
 
   /* USER CODE BEGIN Init */
   /* HAL_Init() 会启动 SysTick；后续 HAL_GetTick() 用它做毫秒级计时。 */
-  /* 这里尽早拉高 PA9，避免开机按键松开后系统立刻掉电。 */
+  /* 这里尽早拉高 power_control(PA10)，避免开机按键松开后系统立刻掉电。 */
   Power_Hold_Early_Init();
 
   /* USER CODE END Init */
@@ -558,9 +558,9 @@ int main(void)
 
   //这两个引脚是临时测试功能使用的
   //这个工程是GitHub下拉的Short_Long_Switch
-  // HAL_GPIO_WritePin(GPIOB, Key_LED_Pin, GPIO_PIN_SET);  /* 上电后先点亮 PB5，表示系统已开始运行；后续状态由 Power_Key_Control_Task 刷新。 */
-  // HAL_GPIO_WritePin(GPIOB, Mos_drived_Pin, GPIO_PIN_SET);  
-  // /* USER CODE END 2 */
+  // HAL_GPIO_WritePin(Key_LED_GPIO_Port, Key_LED_Pin, GPIO_PIN_SET);  /* 上电后先点亮 Key_LED，表示系统已开始运行；后续状态由 Power_Key_Control_Task 刷新。 */
+  // HAL_GPIO_WritePin(Mos_drived_GPIO_Port, Mos_drived_Pin, GPIO_PIN_SET);
+  /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
@@ -583,8 +583,6 @@ void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
-
-  /* 当前工程使用内部 HSI 8MHz，不修改系统时钟；HAL_GetTick() 依赖 SysTick 计时。 */
 
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
